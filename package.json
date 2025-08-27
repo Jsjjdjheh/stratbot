@@ -1,8 +1,12 @@
 {
-  "version": 2,
-  "functions": {
-    "api/*.js": {
-      "runtime": "nodejs18.x"
-    }
+  "name": "telegram-bot-vercel",
+  "version": "1.0.0",
+  "description": "A simple Telegram bot using Vercel serverless function.",
+  "main": "api/bot.js",
+  "scripts": {
+    "start": "node api/bot.js"
+  },
+  "dependencies": {
+    "node-fetch": "^2.6.1"
   }
 }
